@@ -2,11 +2,11 @@ schema_version = "1.0.0"
 
 id = "blender_shapekey_addons"
 
-version = "1.4.1"
+version = "1.5.0"
 
 name = "Blender Shapekey Add-Ons"
 
-tagline = "Organize, search/filter, group-tag, batch-rename, sort, and bulk-edit shapekeys"
+tagline = "Smarter shapekey management for Blender"
 
 maintainer = "LupisYoung"
 
