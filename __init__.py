@@ -1528,6 +1528,11 @@ class SKO_OT_ShapeKeyAdd(Operator):
                     except Exception:
                         pass
 
+                    try:
+                        k_left.value = 0.0
+                    except Exception:
+                        pass
+
                     bpy.ops.object.shape_key_add(from_mix=True)
                     k_right = obj.data.shape_keys.key_blocks[-1]
                     obj.active_shape_key_index = len(obj.data.shape_keys.key_blocks) - 1
