@@ -25,6 +25,7 @@ It streamlines complex workflows with features for creation, duplication, sortin
 - **Grouping System:** Tag shapekeys with custom group names for easy filtering.
 - **Rename Suite:** Add prefixes/suffixes, find & replace, or auto-number shapekeys.
 - **Batch Editing:** Adjust slider ranges, reset values, and toggle mute for many keys at once.
+- **Shapekey Sync:** Continuously copy matching shapekey values and slider ranges to sibling meshes under the same parent.
 - **Safe Ordering:** Move keys around without ever pushing them above the Basis.
 - **Collapsible UI Sections:** Clean and organized interface for Groups, Rename, and Batch Edits.
 
@@ -34,7 +35,7 @@ It streamlines complex workflows with features for creation, duplication, sortin
 
 
 ## Installation
-1. Download the latest release from the [Releases](https://github.com/LupisYoung/Blender-Shapekey-Addons/releases) page.  
+1. Download the latest release from the [Releases](https://github.com/1ALupis/Blender-Shapekey-Addons/releases) page.  
 2. In Blender, go to **Edit → Preferences → Add-ons → Install from Disk...**  
 3. Select the downloaded `.zip` file.  
 4. Enable **Blender Shapekey Add-Ons** from the list.
@@ -51,15 +52,15 @@ It streamlines complex workflows with features for creation, duplication, sortin
 
 
 ## License
-This add-on is licensed under the **GNU General Public License v3 (GPLv3)**.  
-It is free and open-source. You may modify and redistribute it under the same license.
+This add-on is licensed under the **MIT License**.
+You may use, modify, and redistribute it, including in commercial projects, provided the copyright and license notice are included.
 
 
 ## Issues & Contributions
 Found a bug or want to contribute?  
-Visit the issue tracker: [GitHub Issues](https://github.com/LupisYoung/Blender-Shapekey-Addons/issues)
+Visit the issue tracker: [GitHub Issues](https://github.com/1ALupis/Blender-Shapekey-Addons/issues)
 
 ---
 
-© 2025 **LupisYoung** — *Blender Shapekey Add-Ons*
+© 2026 **1ALupis** — *Blender Shapekey Add-Ons*
 </div>

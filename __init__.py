@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Blender Shapekey Add-Ons",
     "author": "LupisYoung",
-    "version": (1, 5, 0),
+    "version": (1, 6, 0),
     "blender": (3, 6, 0),
     "location": "Object Data Properties > Shape Keys",
     "description": "Organize, search/filter, group-tag, batch-rename, sort, and bulk-edit shapekeys.",
@@ -46,7 +46,7 @@ _DBL_THRESHOLD = 0.30
 # Helpers & state
 # =====================================================
 
-GITHUB_REPO = "LupisYoung/Blender-Shapekey-Addons"
+GITHUB_REPO = "1ALupis/Blender-Shapekey-Addons"
 GITHUB_LATEST_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 
@@ -151,6 +151,12 @@ _FACE_TEMPLATE_KEYS = {
         "Tongue_Left", "Tongue_Right",
         "Tongue_Roll",
     ],
+
+    "VRChatVisemes": [
+        "vrc.v_sil", "vrc.v_pp", "vrc.v_ff", "vrc.v_th", "vrc.v_dd",
+        "vrc.v_kk", "vrc.v_ch", "vrc.v_ss", "vrc.v_nn", "vrc.v_rr",
+        "vrc.v_aa", "vrc.v_e", "vrc.v_ih", "vrc.v_oh", "vrc.v_ou",
+    ],
 }
 
 def _manifest_path():
@@ -202,28 +208,6 @@ def _parse_semver_to_tuple(vstr: str):
     cmp = (major, minor, patch, -1 if suffix else 0)
     return (major, minor, patch, suffix), cmp
 
-def _current_version_tuple():
-    """
-    Prefer version from blender_manifest.toml.
-    Falls back to bl_info/ __version__ if manifest missing.
-    """
-    vstr = _manifest_version_str()
-    if vstr:
-        _full, cmp = _parse_semver_to_tuple(vstr)
-        return tuple(cmp[:3])
-
-    try:
-        vi = bl_info.get("version", (0, 0, 0))
-        return tuple(int(x) for x in list(vi[:3]) + [0, 0])[:3]
-    except Exception:
-        pass
-
-    vstr = globals().get("__version__", "")
-    if isinstance(vstr, str) and vstr:
-        full, _cmp = _parse_semver_to_tuple(vstr)
-        return tuple(full[:3])
-
-    return (0, 0, 0)
 
 def current_version_display():
     """Human-readable version for UI—shows prerelease if present."""
@@ -252,6 +236,32 @@ def _fetch_latest_tag():
         return data.get("tag_name") or ""
     except Exception:
         return ""
+
+
+def _sko_clear_native_key_selection(obj, active_index=None):
+    """Change the add-on's active row and clear Blender's temporary key highlights."""
+    if not obj or obj.type != 'MESH' or not obj.data.shape_keys:
+        return
+
+    if active_index is not None:
+        obj.active_shape_key_index = active_index
+    for key in obj.data.shape_keys.key_blocks:
+        try:
+            key.select = False
+        except Exception:
+            pass
+
+
+def _sko_get_active_shape_key_index(obj):
+    return int(getattr(obj, "active_shape_key_index", 0))
+
+
+def _sko_set_active_shape_key_index(obj, value):
+    try:
+        value = int(value)
+    except Exception:
+        value = 0
+    _sko_clear_native_key_selection(obj, active_index=value)
 
 
 def shapekey_max_delta(obj, key):
@@ -369,11 +379,6 @@ def sko_set_status_text(context, text: str | None):
         wm.status_text_set(text)
 
 
-def _elide(text: str, max_len: int = 14) -> str:
-    text = text or ""
-    return text if len(text) <= max_len else (text[:max_len - 1] + "…")
-
-
 def _sko_split_keyblock_half(obj, src_key, axis='X', eps=1e-4, keep_side='LEFT', use_median_plane=False):
     """
     Zero out the opposite half of src_key (relative to Basis), by copying Basis coords.
@@ -432,6 +437,43 @@ def get_target_keys(context, *, require_selected=True, visible_only=True,
     if exclude_basis:
         targets = [k for k in targets if not is_basis_key(context.object, k)]
     return targets
+
+
+def get_priority_targets(context, *, respect_only_selected=True):
+    """Resolve operation targets in checkbox, native-highlight, active-key order."""
+    obj = context.object
+    if not obj or obj.type != 'MESH':
+        return [], "active"
+
+    pool = [key for key in filtered_keys(context, obj) if not is_basis_key(obj, key)]
+    props = context.scene.shapekey_organizer
+    if respect_only_selected and not props.affect_only_selected:
+        return pool, "all"
+
+    checked = [key for key in pool if get_sel(key)]
+    if checked:
+        return checked, "checked"
+
+    highlighted = [key for key in pool if bool(getattr(key, "select", False))]
+    if highlighted:
+        return highlighted, "highlighted"
+
+    active = getattr(obj, "active_shape_key", None)
+    if active in pool:
+        return [active], "active"
+    return [], "none"
+
+
+def get_duplicate_targets(context):
+    targets, selection = get_priority_targets(context)
+    messages = {
+        "all": f"This will affect all {len(targets)} visible key(s).",
+        "checked": f"This will affect {len(targets)} selected key(s).",
+        "highlighted": f"This will affect {len(targets)} highlighted key(s).",
+        "active": "This will affect the active key.",
+        "none": "This will affect 0 keys.",
+    }
+    return targets, messages[selection]
 
 
 class SKO_OT_CheckUpdates(bpy.types.Operator):
@@ -728,15 +770,15 @@ class SKO_Props(PropertyGroup):
         name="Slider Min",
         description="Set slider minimum for (visible) selected keys",
         default=0.0,
-        min=0.0, max=1.0,
-        soft_min=0.0, soft_max=1.0,
+        min=-10.0, max=10.0,
+        soft_min=-10.0, soft_max=10.0,
     )
     slider_max: FloatProperty(
         name="Slider Max",
         description="Set slider maximum for (visible) selected keys",
         default=1.0,
-        min=0.0, max=1.0,
-        soft_min=0.0, soft_max=1.0,
+        min=-10.0, max=10.0,
+        soft_min=-10.0, soft_max=10.0,
     )
     affect_only_selected: BoolProperty(
         name="Only Selected",
@@ -807,6 +849,297 @@ class SKO_Props(PropertyGroup):
     show_batch: BoolProperty(name="Show Batch Edits", default=False)
 
 # =====================================================
+# Shapekey value sync
+# =====================================================
+
+_SKO_SYNC_RUNTIME = {
+    "running": False,
+    "source_name": "",
+    "default_source_name": "",
+    "timer": None,
+    "wm": None,
+    "edit_source_name": "",
+    "edit_snapshots": {},
+    "solo_source_name": "",
+    "solo_target_name": "",
+    "solo_key_name": "",
+    "solo_snapshots": {},
+}
+
+
+def _sko_sync_redraw():
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            area.tag_redraw()
+
+
+def _sko_sync_restore_edit_values():
+    """Restore the source's slider values saved before Edit Mode override."""
+    source_name = _SKO_SYNC_RUNTIME["edit_source_name"]
+    source = bpy.data.objects.get(source_name) if source_name else None
+    values = _SKO_SYNC_RUNTIME["edit_snapshots"].get(source_name, {})
+    if source and source.data.shape_keys:
+        keys = {key.name.casefold(): key for key in source.data.shape_keys.key_blocks}
+        for key_name, value in values.items():
+            key = keys.get(key_name)
+            if key:
+                key.value = value
+    _SKO_SYNC_RUNTIME["edit_snapshots"] = {}
+    _SKO_SYNC_RUNTIME["edit_source_name"] = ""
+    return source
+
+
+def _sko_sync_apply_values(source, values, ranges=None):
+    """Apply matching key values and slider ranges to sibling meshes."""
+    if not source or source.type != 'MESH' or not source.data.shape_keys:
+        return 0
+    parent = source.parent
+    targets = ([o for o in bpy.data.objects if o.type == 'MESH' and o.parent == parent]
+               if parent else [source])
+    changed = 0
+    ranges = ranges or {}
+    for target in targets:
+        if target == source or not target.data.shape_keys:
+            continue
+        target_keys = {key.name.casefold(): key for key in target.data.shape_keys.key_blocks}
+        for name, value in values.items():
+            target_key = target_keys.get(name)
+            if not target_key:
+                continue
+            key_range = ranges.get(name)
+            if key_range:
+                slider_min, slider_max = key_range
+                if (target_key.slider_min != slider_min
+                        or target_key.slider_max != slider_max):
+                    target_key.slider_min = slider_min
+                    target_key.slider_max = slider_max
+                    changed += 1
+            if target_key.value != value:
+                target_key.value = value
+                changed += 1
+    return changed
+
+
+def _sko_sync_restore_solo_values():
+    """Restore source sliders saved before a target's solo-key override."""
+    source_name = _SKO_SYNC_RUNTIME["solo_source_name"]
+    source = bpy.data.objects.get(source_name) if source_name else None
+    values = _SKO_SYNC_RUNTIME["solo_snapshots"].get(source_name, {})
+    if source and source.data.shape_keys:
+        keys = {key.name.casefold(): key for key in source.data.shape_keys.key_blocks}
+        for key_name, value in values.items():
+            key = keys.get(key_name)
+            if key:
+                key.value = value
+    _SKO_SYNC_RUNTIME["solo_source_name"] = ""
+    _SKO_SYNC_RUNTIME["solo_target_name"] = ""
+    _SKO_SYNC_RUNTIME["solo_key_name"] = ""
+    _SKO_SYNC_RUNTIME["solo_snapshots"] = {}
+    return source
+
+
+def _sko_sync_update_solo_override(target, source):
+    """Apply solo-key behavior to the source or a synced sibling mesh."""
+    target_key = None
+    is_source = bool(target and source and target == source)
+    eligible_mode = bool(target and (
+        target.mode == 'OBJECT' or (is_source and target.mode == 'SCULPT')
+    ))
+    same_sync_group = bool(
+        is_source or (target and source and source.parent and target.parent == source.parent)
+    )
+    if (target and source and target.type == 'MESH' and eligible_mode
+            and target.show_only_shape_key and target.data.shape_keys
+            and source.data.shape_keys and same_sync_group):
+        index = target.active_shape_key_index
+        if 0 <= index < len(target.data.shape_keys.key_blocks):
+            candidate = target.data.shape_keys.key_blocks[index]
+            if any(key.name.casefold() == candidate.name.casefold()
+                   for key in source.data.shape_keys.key_blocks):
+                target_key = candidate
+
+    state = _SKO_SYNC_RUNTIME
+    new_identity = ((source.name, target.name, target_key.name.casefold())
+                    if target_key else None)
+    current_identity = (
+        (state["solo_source_name"], state["solo_target_name"], state["solo_key_name"])
+        if state["solo_source_name"] else None
+    )
+
+    if current_identity and current_identity != new_identity:
+        previous_source = _sko_sync_restore_solo_values()
+        if previous_source and previous_source.data.shape_keys:
+            _sko_sync_apply_values(
+                previous_source,
+                {key.name.casefold(): key.value
+                 for key in previous_source.data.shape_keys.key_blocks},
+            )
+
+    if not target_key:
+        return
+
+    if not state["solo_source_name"]:
+        state["solo_source_name"] = source.name
+        state["solo_target_name"] = target.name
+        state["solo_key_name"] = target_key.name.casefold()
+        state["solo_snapshots"] = {
+            source.name: {
+                key.name.casefold(): key.value
+                for key in source.data.shape_keys.key_blocks
+            }
+        }
+
+    selected_name = target_key.name.casefold()
+    for index, key in enumerate(source.data.shape_keys.key_blocks):
+        key.value = 1.0 if index > 0 and key.name.casefold() == selected_name else 0.0
+
+
+def _sko_sync_stop():
+    state = _SKO_SYNC_RUNTIME
+    restored_solo_source = _sko_sync_restore_solo_values()
+    if restored_solo_source and restored_solo_source.data.shape_keys:
+        _sko_sync_apply_values(
+            restored_solo_source,
+            {key.name.casefold(): key.value
+             for key in restored_solo_source.data.shape_keys.key_blocks},
+        )
+    restored_source = _sko_sync_restore_edit_values()
+    if restored_source and restored_source.data.shape_keys:
+        _sko_sync_apply_values(
+            restored_source,
+            {key.name.casefold(): key.value for key in restored_source.data.shape_keys.key_blocks},
+        )
+    state["running"] = False
+    if state["timer"] and state["wm"]:
+        try:
+            state["wm"].event_timer_remove(state["timer"])
+        except Exception:
+            pass
+    state["timer"] = None
+    state["wm"] = None
+    state["source_name"] = ""
+    state["default_source_name"] = ""
+    _sko_sync_redraw()
+
+
+def _sko_sync_source_for(obj):
+    if not _SKO_SYNC_RUNTIME["running"]:
+        return None
+    source = bpy.data.objects.get(_SKO_SYNC_RUNTIME["source_name"])
+    if not source:
+        return None
+    if obj == source or (source.parent and obj.type == 'MESH' and obj.parent == source.parent):
+        return source
+    return None
+
+
+def _sko_sync_key_is_driven(obj, key):
+    source = _sko_sync_source_for(obj)
+    if not source or source == obj or not source.data.shape_keys:
+        return False
+    key_name = key.name.casefold()
+    return any(source_key.name.casefold() == key_name
+               for source_key in source.data.shape_keys.key_blocks)
+
+def _sko_sync_values(source):
+    """Copy current values and slider ranges by case-insensitive key name."""
+    if not source or source.type != 'MESH' or not source.data.shape_keys:
+        return 0
+    edit_override = source.mode == 'EDIT' and not source.use_shape_key_edit_mode
+    snapshot_source = _SKO_SYNC_RUNTIME["edit_source_name"]
+    if snapshot_source and (not edit_override or snapshot_source != source.name):
+        previous_source = _sko_sync_restore_edit_values()
+        if previous_source and previous_source.data.shape_keys:
+            _sko_sync_apply_values(
+                previous_source,
+                {key.name.casefold(): key.value for key in previous_source.data.shape_keys.key_blocks},
+            )
+
+    source_blocks = source.data.shape_keys.key_blocks
+    source_values = {k.name.casefold(): k.value for k in source_blocks}
+    source_ranges = {
+        k.name.casefold(): (k.slider_min, k.slider_max)
+        for k in source_blocks
+    }
+
+    if edit_override:
+        if not _SKO_SYNC_RUNTIME["edit_snapshots"]:
+            _SKO_SYNC_RUNTIME["edit_snapshots"] = {source.name: source_values.copy()}
+            _SKO_SYNC_RUNTIME["edit_source_name"] = source.name
+        active_index = source.active_shape_key_index
+        for index, key in enumerate(source_blocks):
+            source_values[key.name.casefold()] = 1.0 if index == active_index and index != 0 else 0.0
+
+    return _sko_sync_apply_values(source, source_values, source_ranges)
+
+
+class SKO_OT_ShapeKeySyncContinuous(Operator):
+    bl_idname = "shapekey_organizer.shapekey_sync_continuous"
+    bl_label = "Toggle Continuous Sync"
+    bl_description = "Continuously sync matching shapekey values and slider ranges for this mesh"
+
+    _timer = None
+    _source_name = ""
+
+    def modal(self, context, event):
+        if not _SKO_SYNC_RUNTIME["running"]:
+            return {'CANCELLED'}
+        if event.type == 'ESC':
+            _sko_sync_stop()
+            return {'CANCELLED'}
+        if event.type == 'TIMER':
+            active = context.view_layer.objects.active
+            default_name = _SKO_SYNC_RUNTIME["default_source_name"]
+            if (active and active.type == 'MESH' and active.mode in {'EDIT', 'SCULPT'}
+                    and active.data.shape_keys and active.data.shape_keys.key_blocks):
+                source_name = active.name
+            else:
+                source_name = default_name
+            if source_name != self._source_name:
+                self._source_name = source_name
+                _SKO_SYNC_RUNTIME["source_name"] = source_name
+                _sko_sync_redraw()
+            source = bpy.data.objects.get(self._source_name)
+            if not source:
+                _sko_sync_stop()
+                return {'CANCELLED'}
+            if source.mode != 'EDIT' and _SKO_SYNC_RUNTIME["edit_source_name"]:
+                previous_source = _sko_sync_restore_edit_values()
+                if previous_source and previous_source.data.shape_keys:
+                    _sko_sync_apply_values(
+                        previous_source,
+                        {key.name.casefold(): key.value
+                         for key in previous_source.data.shape_keys.key_blocks},
+                    )
+            _sko_sync_update_solo_override(active, source)
+            _sko_sync_values(source)
+        return {'PASS_THROUGH'}
+
+    def invoke(self, context, event):
+        if _SKO_SYNC_RUNTIME["running"]:
+            _sko_sync_stop()
+            self.report({'INFO'}, "Continuous shapekey sync stopped.")
+            return {'FINISHED'}
+        source = active_obj_mesh(context)
+        if not source:
+            self.report({'WARNING'}, "Select a mesh with shapekeys.")
+            return {'CANCELLED'}
+        self._source_name = source.name
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        _SKO_SYNC_RUNTIME.update(
+            running=True,
+            source_name=source.name,
+            default_source_name=source.name,
+            timer=self._timer,
+            wm=wm,
+        )
+        wm.modal_handler_add(self)
+        _sko_sync_redraw()
+        self.report({'INFO'}, f"Syncing shapekeys from {source.name}.")
+        return {'RUNNING_MODAL'}
+
+# =====================================================
 # UI List
 # =====================================================
 
@@ -835,10 +1168,12 @@ class SKO_UL_ShapeKeys(UIList):
             left.active = True
             right.active = True
 
+        native_selected = bool(getattr(key, "select", False)) and not is_active
+
         left_split = left.split(factor=0.75)
         name_row = left_split.row(align=True)
         name_row.alignment = 'LEFT'
-        btn = name_row.operator("shapekey_organizer.key_click", text=key.name, emboss=False)
+        btn = name_row.operator("shapekey_organizer.key_click", text=key.name, emboss=native_selected, depress=native_selected)
         btn.key_name = key.name
         btn.key_index = index
 
@@ -849,7 +1184,11 @@ class SKO_UL_ShapeKeys(UIList):
         else:
             group_cell.separator()
 
-        right.prop(key, 'value', text="")
+        value_cell = right.row(align=True)
+        driven = _sko_sync_key_is_driven(obj, key)
+        if driven:
+            value_cell.alert = True
+        value_cell.prop(key, 'value', text="")
         right.prop(key, 'mute', text="", icon_only=True, icon='HIDE_OFF')
         op = right.operator(
             "shapekey_organizer.toggle_select",
@@ -938,7 +1277,7 @@ class SKO_OT_ToggleShowOnly(bpy.types.Operator):
 class SKO_OT_KeyActivateOrRename(Operator):
     bl_idname = "shapekey_organizer.key_click"
     bl_label = "Rename Shapekey"
-    bl_description = "Single-click: set active. Quick second click: rename."
+    bl_description = "Click to activate this key and clear native highlights. Double-click to rename."
     bl_options = {'REGISTER', 'UNDO'}
 
     key_name: StringProperty(options={'SKIP_SAVE'})
@@ -956,15 +1295,17 @@ class SKO_OT_KeyActivateOrRename(Operator):
             self.new_name = self.key_name
             return context.window_manager.invoke_props_dialog(self, width=260)
 
+        ks = getattr(getattr(obj.data, "shape_keys", None), "key_blocks", None)
+        if not ks:
+            return {'CANCELLED'}
+
         idx = self.key_index
+        if idx < 0 or idx >= len(ks) or ks[idx].name != self.key_name:
+            idx = next((i for i, key in enumerate(ks) if key.name == self.key_name), -1)
         if idx < 0:
-            ks = getattr(getattr(obj.data, 'shape_keys', None), 'key_blocks', None) or []
-            for i, kb in enumerate(ks):
-                if kb.name == self.key_name:
-                    idx = i
-                    break
-        if idx >= 0:
-            obj.active_shape_key_index = idx
+            return {'CANCELLED'}
+
+        _sko_clear_native_key_selection(obj, active_index=idx)
 
         _DBL_CLICK["name"] = self.key_name
         _DBL_CLICK["t"] = now
@@ -1018,7 +1359,7 @@ class SKO_OT_ShapeKeyAdd(Operator):
             ('DUP_SELECTED',  "Duplicate",                "Make a copy of each selected shapekey (ignores Basis)"),
             ('DUP_MIRROR',    "Duplicate & Mirror",       "Duplicate each selected and mirror it"),
             ('SPLIT',         "Duplicate & Split",        "Duplicate each selected and zero each half by axis"),
-            ('FACE_TEMPLATE', "Face Tracking Template",   "Create all empty shapekeys needed for face tracking (UE / ARKit / SRanipal)"),
+            ('FACE_TEMPLATE', "Face Tracking Template",   "Create all empty shapekeys needed for face tracking (UE / ARKit / SRanipal / VRChat Visemes)"),
         ],
         default='EMPTY'
     )
@@ -1105,6 +1446,7 @@ class SKO_OT_ShapeKeyAdd(Operator):
             ("UE", "Unified Expressions (Symmetrical)", ""),
             ("ARKit", "ARKit", ""),
             ("SRanipal", "SRanipal", ""),
+            ("VRChatVisemes", "VRChat Visemes", ""),
         ],
         default="UE",
     )
@@ -1138,6 +1480,8 @@ class SKO_OT_ShapeKeyAdd(Operator):
             col.prop(self, "duplicate_suffix")
             col.prop(self, "bake_vertex_groups")
             box = layout.box()
+            _targets, target_message = get_duplicate_targets(context)
+            box.label(text=target_message)
             box.label(text="Tip: If Prefix and Suffix are empty,")
             box.label(text="Duplicates are suffixed with .001, .002, etc.")
 
@@ -1147,6 +1491,8 @@ class SKO_OT_ShapeKeyAdd(Operator):
             row.prop(self, "use_topology", text="Use Topology")
             row.prop(self, "bake_vertex_groups")
             box = layout.box()
+            _targets, target_message = get_duplicate_targets(context)
+            box.label(text=target_message)
             box.label(text="Tip: If Prefix and Suffix are empty,")
             box.label(text="Duplicates are suffixed with \"_Mirror\"")
 
@@ -1162,6 +1508,8 @@ class SKO_OT_ShapeKeyAdd(Operator):
             row.prop(self, "use_median_plane")
             row.prop(self, "bake_vertex_groups")
             box = layout.box()
+            _targets, target_message = get_duplicate_targets(context)
+            box.label(text=target_message)
             box.label(text="Tip: If Left and/or Right token are empty,")
             box.label(text="Duplicates are suffixed with \"_L\" and \"_R\"")
 
@@ -1176,8 +1524,14 @@ class SKO_OT_ShapeKeyAdd(Operator):
                 box.label(text="Generates 52 keys matching Apple's ARKit shapekey set.")
             elif self.face_template == 'SRanipal':
                 box.label(text="Generates 51 keys matching Vive SRanipal's shapekey set.")
-            box.label(text="For detailed shapekey documentation:")
-            box.operator("wm.url_open", text="Open VRCFT Documentation").url = "https://docs.vrcft.io/docs/tutorial-avatars/tutorial-avatars-extras/compatibility/overview#standard-documentation"
+            elif self.face_template == 'VRChatVisemes':
+                box.label(text="Generates 15 vrc.v_ viseme keys for VRChat lip sync.")
+                box.label(text="Give vrc.v_sil a tiny vertex movement so Unity keeps it on import.")
+            box.label(text="For detailed documentation:")
+            if self.face_template == 'VRChatVisemes':
+                box.operator("wm.url_open", text="Open Meta Viseme Reference").url = "https://developers.meta.com/vr/documentation/unity/audio-ovrlipsync-viseme-reference/"
+            else:
+                box.operator("wm.url_open", text="Open VRCFT Documentation").url = "https://docs.vrcft.io/docs/tutorial-avatars/tutorial-avatars-extras/compatibility/overview#standard-documentation"
 
     def _move_key_after_source(self, obj, new_key_name, source_key_name):
         """Move a newly created shape key to appear right after its source key in the list"""
@@ -1277,11 +1631,7 @@ class SKO_OT_ShapeKeyAdd(Operator):
                 self.report({'WARNING'}, "No shapekeys to duplicate.")
                 return {'CANCELLED'}
 
-            targets = get_target_keys(context,
-                                      require_selected=props.affect_only_selected,
-                                      visible_only=True,
-                                      fallback_to_active=True,
-                                      exclude_basis=True)
+            targets, _target_message = get_duplicate_targets(context)
             if not targets:
                 self.report({'INFO'}, "No selected shapekeys to duplicate.")
                 return {'CANCELLED'}
@@ -1390,11 +1740,7 @@ class SKO_OT_ShapeKeyAdd(Operator):
                 self.report({'WARNING'}, "No shapekeys to mirror.")
                 return {'CANCELLED'}
 
-            targets = get_target_keys(context,
-                                      require_selected=props.affect_only_selected,
-                                      visible_only=True,
-                                      fallback_to_active=True,
-                                      exclude_basis=True)
+            targets, _target_message = get_duplicate_targets(context)
             if not targets:
                 self.report({'INFO'}, "No selected shapekeys to mirror.")
                 return {'CANCELLED'}
@@ -1489,11 +1835,7 @@ class SKO_OT_ShapeKeyAdd(Operator):
                 self.report({'WARNING'}, "Object has no shapekeys to split.")
                 return {'CANCELLED'}
 
-            targets = get_target_keys(context,
-                                      require_selected=props.affect_only_selected,
-                                      visible_only=True,
-                                      fallback_to_active=True,
-                                      exclude_basis=True)
+            targets, _target_message = get_duplicate_targets(context)
             if not targets:
                 self.report({'WARNING'}, "Select one or more shapekeys (non-Basis) or set an active shapekey.")
                 return {'CANCELLED'}
@@ -1644,7 +1986,10 @@ class SKO_OT_ShapeKeyAdd(Operator):
             created = 0
             skipped = 0
 
-            separator_name = "-- FACE TRACKING --"
+            separator_name = (
+                "-- VRC VISEMES --" if self.face_template == 'VRChatVisemes'
+                else "-- FACE TRACKING --"
+            )
             if separator_name not in existing:
                 try:
                     obj.shape_key_add(name=separator_name, from_mix=False)
@@ -1729,51 +2074,46 @@ class SKO_OT_ShapeKeyAdd(Operator):
 class SKO_OT_ShapeKeyDelete(bpy.types.Operator):
     bl_idname = "shapekey_organizer.shape_key_delete"
     bl_label = "Delete Shapekeys"
-    bl_description = "Delete selected shapekeys; if none are selected, delete the active shapekey"
+    bl_description = "Delete checkmarked keys, then native-highlighted keys, then the active key"
     bl_options = {'REGISTER', 'UNDO'}
 
-    _target_names: list[str] = None
-    _used_fallback: bool = False
+    target_names_json: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
+    selection_source: StringProperty(options={'HIDDEN', 'SKIP_SAVE'})
 
     def _gather_targets(self, context):
-        """Build target list and detect if we fell back to the active key."""
-        obj = context.object
-        if not obj or obj.type != 'MESH':
-            return [], False
-
-        pool = filtered_keys(context, obj)
-        any_selected = any(get_sel(k) and not is_basis_key(obj, k) for k in pool)
-
-        targets = get_target_keys(context,
-                                  require_selected=True,
-                                  visible_only=True,
-                                  fallback_to_active=True,
-                                  exclude_basis=True
-        )
+        """Build delete targets by selection priority."""
+        targets, selection = get_priority_targets(context, respect_only_selected=False)
         names = [k.name for k in targets]
-        used_fallback = (not any_selected) and (len(names) == 1)
-
-        return names, used_fallback
+        return names, selection
 
     def invoke(self, context, event):
-        names, used_fallback = self._gather_targets(context)
+        names, selection = self._gather_targets(context)
         if not names:
             self.report({'INFO'}, "No shapekeys to delete.")
             return {'CANCELLED'}
 
-        self._target_names = names
-        self._used_fallback = used_fallback
+        self.target_names_json = json.dumps(names)
+        self.selection_source = selection
         return context.window_manager.invoke_props_dialog(self, width=360)
 
     def draw(self, context):
         layout = self.layout
-        names = self._target_names or []
+        try:
+            names = json.loads(self.target_names_json or "[]")
+        except Exception:
+            names = []
 
-        if self._used_fallback and len(names) == 1:
-            layout.label(text="Delete active shapekey?", icon='INFO')
+        delete_messages = {
+            "checked": f"This will delete {len(names)} selected key(s).",
+            "highlighted": f"This will delete {len(names)} highlighted keys.",
+            "active": "This will delete the active key.",
+            "none": "This will delete 0 keys.",
+        }
+        layout.label(text=delete_messages.get(self.selection_source, "This will delete the selected keys."), icon='INFO')
+
+        if self.selection_source == "active" and len(names) == 1:
             layout.label(text=names[0], icon='SHAPEKEY_DATA')
         else:
-            layout.label(text=f"Delete {len(names)} shapekey(s)?", icon='INFO')
             for n in names[:6]:
                 layout.label(text=n, icon='DOT')
             if len(names) > 6:
@@ -1781,34 +2121,34 @@ class SKO_OT_ShapeKeyDelete(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.object
+        if not obj or obj.type != 'MESH':
+            return {'CANCELLED'}
         sk = getattr(getattr(obj.data, 'shape_keys', None), 'key_blocks', None)
-        if not obj or not sk:
+        if not sk:
             return {'CANCELLED'}
 
-        names = self._target_names
+        try:
+            names = json.loads(self.target_names_json or "[]")
+        except Exception:
+            names = []
         if not names:
-            names, _ = self._gather_targets(context)
+            names, _selection = self._gather_targets(context)
             if not names:
                 self.report({'INFO'}, "No shapekeys to delete.")
                 return {'CANCELLED'}
 
-        indices = []
+        deleted = 0
         for n in names:
-            kb = sk.get(n)
-            if kb:
-                idx = list(sk).index(kb)
-                if idx > 0:
-                    indices.append(idx)
-
-        indices.sort(reverse=True)
-        for idx in indices:
-            obj.active_shape_key_index = idx
+            key = sk.get(n)
+            if not key or key == sk[0]:
+                continue
             try:
-                bpy.ops.object.shape_key_remove(all=False)
-            except Exception:
-                pass
+                obj.shape_key_remove(key)
+                deleted += 1
+            except Exception as exc:
+                self.report({'WARNING'}, f"Could not delete '{n}': {exc}")
 
-        self.report({'INFO'}, f"Deleted {len(indices)} shapekey(s).")
+        self.report({'INFO'}, f"Deleted {deleted} shapekey(s).")
         return {'FINISHED'}
 
 
@@ -2148,7 +2488,8 @@ class SKO_OT_Sort(Operator):
 
         props = context.scene.shapekey_organizer
 
-        visible = filtered_keys(context, obj)
+        visible = [key for key in filtered_keys(context, obj)
+                   if not is_basis_key(obj, key)]
 
         targets = [k for k in visible if get_sel(k)] if props.affect_only_selected else list(visible)
         if not targets:
@@ -2219,46 +2560,67 @@ class SKO_OT_MoveSelected(Operator):
             self.report({'WARNING'}, "Select a mesh object with shapekeys.")
             return {'CANCELLED'}
 
-        targets = get_target_keys(context,
-                                  require_selected=True,
-                                  visible_only=True,
-                                  fallback_to_active=True,
-                                  exclude_basis=True)
+        ks = list(iter_keyblocks(obj))
+        visible = filtered_keys(context, obj)
+        sko_targets = [key for key in visible
+                       if not is_basis_key(obj, key) and get_sel(key)]
+        native_targets = [key for key in visible
+                          if not is_basis_key(obj, key)
+                          and bool(getattr(key, "select", False))]
+        if sko_targets:
+            targets = sko_targets
+        elif native_targets:
+            targets = native_targets
+        else:
+            active_key = getattr(obj, "active_shape_key", None)
+            targets = ([active_key] if active_key and active_key in visible
+                       and not is_basis_key(obj, active_key) else [])
         if not targets:
             self.report({'INFO'}, "No keys to move.")
             return {'CANCELLED'}
 
-        ks = list(iter_keyblocks(obj))
         name_to_idx = {k.name: i for i, k in enumerate(ks)}
         idxs = [name_to_idx[k.name] for k in targets if k.name in name_to_idx]
 
-        if self.direction in {'TOP', 'UP'}:
+        if self.direction in {'UP', 'BOTTOM'}:
             order = sorted(idxs)
         else:
             order = sorted(idxs, reverse=True)
 
         target_names = [ks[i].name for i in order]
+        key_blocks = obj.data.shape_keys.key_blocks
+        native_selection = {key.name: bool(getattr(key, "select", False)) for key in key_blocks}
+        moved = 0
+        try:
+            for name in target_names:
+                current_idx = next((i for i, key in enumerate(key_blocks) if key.name == name), -1)
 
-        for name in target_names:
-            current_idx = -1
-            for i, k in enumerate(obj.data.shape_keys.key_blocks):
-                if k.name == name:
-                    current_idx = i
-                    break
+                if current_idx < 0:
+                    continue
 
-            if current_idx < 0:
-                continue
+                obj.active_shape_key_index = current_idx
 
-            obj.active_shape_key_index = current_idx
+                for key in key_blocks:
+                    try:
+                        key.select = (key.name == name)
+                    except Exception:
+                        pass
 
-            if self.direction == 'TOP':
-                move_active_to_top_below_basis(obj)
-            else:
-                bpy.ops.object.shape_key_move(type=self.direction)
-                if self.direction == 'UP':
-                    _ensure_active_not_basis(obj)
+                if self.direction == 'TOP':
+                    move_active_to_top_below_basis(obj)
+                else:
+                    bpy.ops.object.shape_key_move(type=self.direction)
+                    if self.direction == 'UP':
+                        _ensure_active_not_basis(obj)
+                moved += 1
+        finally:
+            for key in key_blocks:
+                try:
+                    key.select = native_selection.get(key.name, False)
+                except Exception:
+                    pass
 
-        self.report({'INFO'}, f"Moved {len(order)} keys {self.direction.lower()}.")
+        self.report({'INFO'}, f"Moved {moved} keys {self.direction.lower()}.")
         return {'FINISHED'}
 
 
@@ -2307,22 +2669,22 @@ class SKO_OT_SetSliderRange(Operator):
             return {'CANCELLED'}
         props = context.scene.shapekey_organizer
 
-        min_v = max(0.0, min(1.0, float(props.slider_min)))
-        max_v = max(0.0, min(1.0, float(props.slider_max)))
+        min_v = max(-10.0, min(10.0, float(props.slider_min)))
+        max_v = max(-10.0, min(10.0, float(props.slider_max)))
 
         if min_v > max_v:
             min_v, max_v = max_v, min_v
 
         if abs(max_v - min_v) < 1e-9:
             eps = 1e-4
-            if min_v <= 0.0:
-                max_v = min(min_v + eps, 1.0)
-            elif max_v >= 1.0:
-                min_v = max(max_v - eps, 0.0)
+            if min_v <= -10.0:
+                max_v = min(min_v + eps, 10.0)
+            elif max_v >= 10.0:
+                min_v = max(max_v - eps, -10.0)
             else:
                 half = eps * 0.5
-                min_v = max(0.0, min_v - half)
-                max_v = min(1.0, max_v + half)
+                min_v = max(-10.0, min_v - half)
+                max_v = min(10.0, max_v + half)
 
         targets = get_target_keys(context,
                                   require_selected=props.affect_only_selected,
@@ -3233,11 +3595,18 @@ class SKO_PT_Main(Panel):
 
         # List
         list_row = box.row(align=True)
-        list_row.template_list("SKO_UL_shapekeys", "", obj.data.shape_keys, "key_blocks", obj, "active_shape_key_index", rows=10)
+        list_row.template_list("SKO_UL_shapekeys", "", obj.data.shape_keys, "key_blocks", obj, "sko_active_shape_key_index", rows=10)
         if obj.data.shape_keys and obj.active_shape_key_index >= 0:
             active_key = obj.data.shape_keys.key_blocks[obj.active_shape_key_index]
-            vg_row = box.row(align=True)
+            settings_col = box.column(align=True)
+            range_split = settings_col.split(factor=0.24, align=True)
+            range_split.label(text="Slider Range:")
+            range_row = range_split.row(align=True)
+            range_row.prop(active_key, "slider_min", text="Min")
+            range_row.prop(active_key, "slider_max", text="Max")
+            vg_row = settings_col.row(align=True)
             vg_row.prop_search(active_key, "vertex_group", obj, "vertex_groups", text="Vertex Group", icon='GROUP_VERTEX')
+        sync_source = _sko_sync_source_for(obj)
         sub = box.box()
         row = sub.row(align=True)
         row.operator("shapekey_organizer.shape_key_add", text="Create…", icon='ADD')
@@ -3247,8 +3616,22 @@ class SKO_PT_Main(Panel):
         controls.operator("shapekey_organizer.select_none", icon='CHECKBOX_DEHLT')
         controls.operator("shapekey_organizer.select_invert", icon='ARROW_LEFTRIGHT')
         controls.operator("shapekey_organizer.sync_state", icon='FILE_REFRESH')
-        sub.label(text="Tip: Shift-click a checkbox to select or unselect a range.")
-        sub.label(text="When no keys are selected, operations apply to the active key.")
+        sub.operator(
+            "shapekey_organizer.shapekey_sync_continuous",
+            text="Stop Syncing" if _SKO_SYNC_RUNTIME["running"] else "Enable Shapekey Sync",
+            icon='PAUSE' if _SKO_SYNC_RUNTIME["running"] else 'REC',
+            depress=_SKO_SYNC_RUNTIME["running"],
+        )
+        if sync_source == obj:
+            default_name = _SKO_SYNC_RUNTIME["default_source_name"]
+            if sync_source.name != default_name:
+                mode_name = "Edit Mode" if sync_source.mode == 'EDIT' else "Sculpt Mode"
+                sub.label(text=f"{sync_source.name} is temporarily the active sync source in {mode_name}.")
+                sub.label(text=f"The active source and its settings will revert to {default_name} in Object Mode.")
+            else:
+                sub.label(text="This mesh is the active sync source.")
+        elif sync_source:
+            sub.label(text=f"This mesh is being synced with {sync_source.name}.")
 
         # Ordering
         sm = layout.box()
@@ -3397,6 +3780,7 @@ classes = (
     SKO_UL_ShapeKeys,
     SKO_UL_Groups,
     SKO_OT_TransferSelectedShapeKeys,
+    SKO_OT_ShapeKeySyncContinuous,
     SKO_OT_SelectEmptyShapeKeys,
     SKO_OT_ToggleUseEditMode,
     SKO_OT_ToggleShowOnly,
@@ -3436,6 +3820,12 @@ def register():
     bpy.types.Scene.sko_items = CollectionProperty(type=SKO_Item)
     bpy.types.Scene.sko_groups = CollectionProperty(type=SKO_GroupItem)
     bpy.types.Scene.sko_groups_index = IntProperty(default=-1)
+    bpy.types.Object.sko_active_shape_key_index = IntProperty(
+        name="Active Shape Key Index",
+        get=_sko_get_active_shape_key_index,
+        set=_sko_set_active_shape_key_index,
+        options={'HIDDEN'},
+    )
 
     if _sko_auto_check not in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.append(_sko_auto_check)
@@ -3447,6 +3837,9 @@ def unregister():
             bpy.app.handlers.load_post.remove(_sko_auto_check)
     except Exception:
         pass
+
+    if hasattr(bpy.types.Object, 'sko_active_shape_key_index'):
+        del bpy.types.Object.sko_active_shape_key_index
 
     for c in reversed(classes):
         bpy.utils.unregister_class(c)

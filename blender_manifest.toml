@@ -2,23 +2,23 @@ schema_version = "1.0.0"
 
 id = "blender_shapekey_addons"
 
-version = "1.5.0"
+version = "1.6.0"
 
 name = "Blender Shapekey Add-Ons"
 
 tagline = "Smarter shapekey management for Blender"
 
-maintainer = "LupisYoung"
+maintainer = "1ALupis"
 
 type = "add-on"
 
-website = "https://github.com/LupisYoung/Blender-Shapekey-Addons"
+website = "https://github.com/1ALupis/Blender-Shapekey-Addons"
 
 tags = ["Mesh", "Object", "User Interface"]
 
 blender_version_min = "4.2.0"
 
-license = ["SPDX:GPL-3.0-or-later"]
+license = ["SPDX:MIT"]
 
 [permissions]
 network = "Check GitHub for latest release"
