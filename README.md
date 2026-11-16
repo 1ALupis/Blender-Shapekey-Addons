@@ -52,8 +52,8 @@ It streamlines complex workflows with features for creation, duplication, sortin
 
 
 ## License
-This add-on is licensed under the **MIT License**.
-You may use, modify, and redistribute it, including in commercial projects, provided the copyright and license notice are included.
+This add-on is licensed under the GNU General Public License v3 (GPLv3).
+It is free and open-source. You may modify and redistribute it under the same license.
 
 
 ## Issues & Contributions
